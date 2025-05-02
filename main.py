@@ -48,9 +48,8 @@ from utils.export_utils import (
 )
 from utils.git_utils import git_integration
 from utils.security_utils import security_scan
+from utils.file_type_utils import is_binary_file, get_file_info
 from utils.file_utils import (
-    is_binary,
-    detect_shebang_language,
     count_lines,
     scan_directory
 )
@@ -161,36 +160,16 @@ def load_config():
         return set(map(str.strip, exclude_dirs)), set(map(str.strip, include_exts)), output_format
     return set(), set(), 'table'
 
-def is_binary(file_path):
-    try:
-        import magic
-        mime = magic.from_file(file_path, mime=True)
-        return not mime.startswith('text')
-    except:
-        return True
-
-def detect_shebang_language(line):
-    if 'python' in line:
-        return 'Python'
-    elif 'bash' in line or 'sh' in line:
-        return 'Shell'
-    return None
-
 def count_lines(file_path, language):
     code = blank = comments = 0
     comment_token = COMMENT_SYNTAX.get(language, None)
     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-        for idx, line in enumerate(f):
+        for line in f:
             stripped = line.strip()
             if not stripped:
                 blank += 1
             elif comment_token and stripped.startswith(comment_token):
                 comments += 1
-            elif idx == 0 and line.startswith("#!"):
-                detected = detect_shebang_language(line)
-                if detected:
-                    language = detected
-                    comment_token = COMMENT_SYNTAX.get(language, None)
             else:
                 code += 1
     return code, blank, comments, language
@@ -216,12 +195,14 @@ def scan_directory(path, exclude_dirs, include_exts, per_file=True):
         task = progress.add_task("Scanning files...", total=len(files))
         for file_path in files:
             progress.update(task, advance=1)
-            if is_binary(file_path):
+            if is_binary_file(file_path):
                 continue
             ext = os.path.splitext(file_path)[1].lower()
             if include_exts and ext not in include_exts:
                 continue
-            language = EXT_LANG_MAP.get(ext)
+                
+            # Get file info including language
+            _, _, language = get_file_info(file_path)
             if not language:
                 continue
             
@@ -660,7 +641,7 @@ def security_scan(file_stats, path):
                 })
             
             # Check for potential hardcoded secrets in code files
-            if os.path.exists(absolute_path) and not is_binary(absolute_path):
+            if os.path.exists(absolute_path) and not is_binary_file(absolute_path):
                 try:
                     with open(absolute_path, 'r', encoding='utf-8', errors='ignore') as f:
                         content = f.read().lower()

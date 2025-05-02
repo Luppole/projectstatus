@@ -1,6 +1,8 @@
 rich>=10.0.0
 prompt_toolkit>=3.0.0
-networkx>=2.5
-radon>=5.0.0
-openpyxl>=3.0.0
-python-magic>=0.4.0 
+python-magic>=0.4.27
+radon>=6.0.0
+networkx>=3.0.0
+matplotlib>=3.0.0
+pandas>=2.0.0
+openpyxl>=3.0.0 

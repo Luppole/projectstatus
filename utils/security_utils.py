@@ -5,7 +5,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress
 from config import SECURITY_PATTERNS, LARGE_SCRIPT_THRESHOLD
-from .file_utils import is_binary
+from .file_type_utils import is_binary_file
 
 console = Console()
 
@@ -40,7 +40,7 @@ def security_scan(file_stats, path):
                 })
             
             # Check for potential hardcoded secrets in code files
-            if os.path.exists(absolute_path) and not is_binary(absolute_path):
+            if os.path.exists(absolute_path) and not is_binary_file(absolute_path):
                 try:
                     with open(absolute_path, 'r', encoding='utf-8', errors='ignore') as f:
                         content = f.read().lower()

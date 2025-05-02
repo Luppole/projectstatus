@@ -148,7 +148,7 @@ def dependency_analysis(path):
                     G.add_edge(fn, name)
     console.print("[bold]🔗 Dependency Graph (adjacency)[/bold]")
     if not G.nodes:
-        console.print("[yellow]No supported files detected.[yellow]")
+        console.print("[yellow]No supported files detected.[/yellow]")
         return
     for src in sorted(G.nodes):
         nbrs = sorted(n for n in G.adj[src] if n in G.nodes)

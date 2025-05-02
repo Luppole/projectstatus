@@ -16,6 +16,8 @@ from rich.progress import Progress
 from rich.tree import Tree
 from rich.panel import Panel
 from rich.prompt import Prompt, IntPrompt, Confirm
+from rich.spinner import Spinner
+from rich.box import SIMPLE
 
 console = Console()
 
@@ -634,65 +636,69 @@ def generate_tree_view(file_stats, path):
     console.print(tree)
 
 def interactive_menu():
-    options = {
-        "1": "Show summary table",
-        "2": "Show per‑file table",
-        "3": "Show tree view",
-        "4": "Compare with last snapshot",
-        "5": "Estimate test coverage",
-        "6": "Run security scan",
-        "7": "Export to JSON",
-        "8": "Export to CSV",
-        "9": "Export to Excel",
-        "0": "Exit"
-    }
-    menu = Table.grid(padding=1)
-    menu.add_column("Key", style="cyan bold", width=5)
+    console.clear()
+    console.rule("[bold magenta]🚀 Project Status CLI 🚀[/bold magenta]", style="bright_blue")
+    menu = Table(title="📋 Select an Action", box=SIMPLE)
+    menu.add_column("Key", justify="center", style="cyan bold", width=5)
     menu.add_column("Action", style="white")
-    for key, desc in options.items():
-        menu.add_row(key, desc)
-    console.print(Panel(menu, title="Select Action"))
-    choice = Prompt.ask("Enter choice", choices=list(options.keys()), default="1")
-    return choice
+    menu.add_row("1", "📊 Show summary table")
+    menu.add_row("2", "📄 Show per‑file table")
+    menu.add_row("3", "🌳 Show tree view")
+    menu.add_row("4", "🔍 Compare with last snapshot")
+    menu.add_row("5", "🧪 Estimate test coverage")
+    menu.add_row("6", "🔒 Run security scan")
+    menu.add_row("7", "💾 Export to JSON")
+    menu.add_row("8", "💽 Export to CSV")
+    menu.add_row("9", "📈 Export to Excel")
+    menu.add_row("R", "🔄 Rescan directory")
+    menu.add_row("0", "❌ Exit")
+    console.print(menu)
+    return Prompt.ask("➡️  Enter choice", choices=[*map(str, range(10)), "R"], default="1").upper()
 
 def main():
-    # 1) Ask for directory and filters up front
-    path = Prompt.ask("Path to scan", default=".")
-    exclude = Prompt.ask("Exclude dirs (comma‑sep)", default="")
-    include = Prompt.ask("Include exts (comma‑sep)", default="")
+    path = Prompt.ask("📂 Path to scan", default=".")
+    exclude = Prompt.ask("🚫 Exclude dirs (comma‑sep)", default="")
+    include = Prompt.ask("✅ Include exts (comma‑sep)", default="")
     exclude_dirs = set(d.strip() for d in exclude.split(",") if d.strip())
     include_exts = set(e.strip() for e in include.split(",") if e.strip())
 
-    # 2) Perform initial scan
     stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
 
-    # 3) Loop on menu until exit
     while True:
         choice = interactive_menu()
         if choice == "0":
-            console.print("[green]Goodbye![/green]")
+            console.clear()
+            console.print("[bold green]👋 Goodbye![/bold green]")
             break
-        elif choice == "1":
-            print_table(stats)
-        elif choice == "2":
-            print_file_table(file_stats)
-        elif choice == "3":
-            generate_tree_view(file_stats, path)
-        elif choice == "4":
-            compare_snapshots()
-        elif choice == "5":
-            estimate_test_coverage(file_stats)
-        elif choice == "6":
-            security_scan(file_stats, path)
-        elif choice == "7":
-            export_to_json(stats, file_stats=file_stats)
-        elif choice == "8":
-            export_to_csv(stats, file_stats=file_stats)
-        elif choice == "9":
-            export_to_excel(stats, file_stats=file_stats)
-        # allow re‑scanning if user desires
-        elif choice == "r":
-            stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
+
+        action_map = {
+            "1": ("Summary", print_table, (stats,)),
+            "2": ("Per‑file", print_file_table, (file_stats,)),
+            "3": ("Tree view", generate_tree_view, (file_stats, path)),
+            "4": ("Compare snapshots", compare_snapshots, ()),
+            "5": ("Test coverage", estimate_test_coverage, (file_stats,)),
+            "6": ("Security scan", security_scan, (file_stats, path)),
+            "7": ("Export JSON", export_to_json, (stats,)),
+            "8": ("Export CSV", export_to_csv, (stats,)),
+            "9": ("Export Excel", export_to_excel, (stats,))
+        }
+
+        if choice == "R":
+            console.clear()
+            with console.status("[yellow]🔄 Rescanning… please wait") as st:
+                stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
+            console.print("[green]✅ Rescan complete![/green]")
+        elif choice in action_map:
+            label, func, args = action_map[choice]
+            console.clear()
+            with console.status(f"[bold blue]🔧 {label} in progress…"):
+                func(*args)
+        else:
+            console.print(f"[red]Invalid choice:[/red] {choice}")
+
+        # wait for user, then clear before redrawing menu
+        Prompt.ask("\n[grey]Press Enter to return to menu[/grey]", default="", show_default=False)
+        console.clear()
 
 if __name__ == "__main__":
     main()

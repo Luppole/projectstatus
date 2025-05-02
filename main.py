@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-import os
-import re
-import json
-import csv
-import time
-import magic
-import configparser
-import subprocess
-import signal
+import os, time, json, csv, configparser, subprocess, signal, importlib, re
 from datetime import datetime
 from collections import defaultdict
 from rich.console import Console
@@ -18,8 +10,13 @@ from rich.panel import Panel
 from rich.prompt import Prompt, IntPrompt, Confirm
 from rich.spinner import Spinner
 from rich.box import SIMPLE
+from rich.theme import Theme
+from rich.markdown import Markdown
+from prompt_toolkit import prompt
+from prompt_toolkit.completion import FuzzyWordCompleter
 
 console = Console()
+command_registry = {}   # plugin hooks
 
 EXT_LANG_MAP = {
     '.py': 'Python', '.js': 'JavaScript', '.ts': 'TypeScript', '.jsx': 'JSX',
@@ -40,6 +37,66 @@ current_stats = None
 current_file_stats = None
 current_path = None
 
+# 1) Theme support
+THEMES = {
+    "light": Theme({"info": "black on white", "warning": "yellow"}),
+    "dark":  Theme({"info": "white on black", "warning": "bright_yellow"}),
+    "neon":  Theme({"info": "magenta", "warning": "cyan"}),
+    "matrix":Theme({"info": "green", "warning": "bright_green"}),
+}
+def choose_theme():
+    choice = Prompt.ask("🎨 Choose theme", choices=list(THEMES.keys()), default="dark")
+    console.theme = THEMES[choice]
+
+# 2) Plugin loader
+def load_plugins():
+    if not os.path.isdir("plugins"):
+        return
+    for fn in os.listdir("plugins"):
+        if fn.endswith(".py"):
+            name = fn[:-3]
+            mod = importlib.import_module(f"plugins.{name}")
+            if hasattr(mod, "register"):
+                mod.register(command_registry)
+
+# 3) Dynamic summary badge
+def show_dynamic_summary(elapsed, files_count, stats):
+    total_loc = sum(v["code"] for v in stats.values())
+    badges = [
+        f"✅ Scanned {files_count} files",
+        f"⏱️ {elapsed:.2f}s",
+        f"🐍 Python: {stats.get('Python',{}).get('code',0)} LOC",
+        f"🚀 Total LOC: {total_loc}"
+    ]
+    console.print("   ".join(f"[bold cyan]{b}[/]" for b in badges))
+
+# 4) Snapshot timeline
+def show_snapshot_timeline():
+    history = sorted(os.listdir(".loc_history"), reverse=True)
+    table = Table(title="📆 Snapshot Timeline")
+    table.add_column("Date")
+    table.add_column("Change")
+    for fn in history:
+        if fn.endswith(".json"):
+            data = json.load(open(f".loc_history/{fn}"))
+            ts = data.get("timestamp",fn)
+            loc = sum(v["code"] for v in data.get("languages",{}).values())
+            table.add_row(ts, str(loc))
+    console.print(table)
+
+# 5) Fuzzy file search
+def fuzzy_search_file(file_stats):
+    completer = FuzzyWordCompleter(list(file_stats.keys()))
+    sel = prompt("🔍 Search file: ", completer=completer)
+    info = file_stats.get(sel)
+    if info:
+        table = Table(title=f"Details for {sel}")
+        for k,v in info.items():
+            table.add_row(k, str(v))
+        console.print(table)
+    else:
+        console.print(f"[red]No match for {sel}[/]")
+
 def load_config():
     config = configparser.ConfigParser()
     if os.path.exists('.locconfig'):
@@ -52,6 +109,7 @@ def load_config():
 
 def is_binary(file_path):
     try:
+        import magic
         mime = magic.from_file(file_path, mime=True)
         return not mime.startswith('text')
     except:
@@ -600,6 +658,7 @@ def security_scan(file_stats, path):
     
     return security_flags
 
+# 6) Breadcrumb tree view
 def generate_tree_view(file_stats, path):
     """Generate a tree view of the project with LOC information"""
     # Create a tree structure
@@ -635,70 +694,122 @@ def generate_tree_view(file_stats, path):
     add_to_tree(tree, tree_structure)
     console.print(tree)
 
+# 8) Plugin command execution
+def run_plugin(cmd):
+    if cmd in command_registry:
+        command_registry[cmd]()
+
 def interactive_menu():
     console.clear()
-    console.rule("[bold magenta]🚀 Project Status CLI 🚀[/bold magenta]", style="bright_blue")
-    menu = Table(title="📋 Select an Action", box=SIMPLE)
-    menu.add_column("Key", justify="center", style="cyan bold", width=5)
-    menu.add_column("Action", style="white")
-    menu.add_row("1", "📊 Show summary table")
-    menu.add_row("2", "📄 Show per‑file table")
-    menu.add_row("3", "🌳 Show tree view")
-    menu.add_row("4", "🔍 Compare with last snapshot")
-    menu.add_row("5", "🧪 Estimate test coverage")
-    menu.add_row("6", "🔒 Run security scan")
-    menu.add_row("7", "💾 Export to JSON")
-    menu.add_row("8", "💽 Export to CSV")
-    menu.add_row("9", "📈 Export to Excel")
-    menu.add_row("R", "🔄 Rescan directory")
+    console.rule("[bold magenta]🚀 Project Status CLI 🚀[/bold magenta]")
+    menu = Table(box=SIMPLE)
+    menu.add_column("Key", style="cyan bold", width=3)
+    menu.add_column("Action")
+    menu.add_row("1", "📊 Summary table")
+    menu.add_row("2", "📄 Per‑file stats")
+    menu.add_row("3", "🌳 Tree view")
+    menu.add_row("4", "🔍 Fuzzy search file")
+    menu.add_row("5", "📊 Test coverage")  # Added test coverage
+    menu.add_row("6", "📆 Snapshot timeline")
+    menu.add_row("7", "🔄 Compare snapshots")  # Explicitly compare snapshots
+    menu.add_row("8", "💾 Export options")  # Added export submenu
+    menu.add_row("9", "🔒 Security scan")
+    menu.add_row("T", "🎨 Change theme")
+    menu.add_row("R", "🔄 Rescan")
+    menu.add_row("I", "ℹ️ Info")
     menu.add_row("0", "❌ Exit")
     console.print(menu)
-    return Prompt.ask("➡️  Enter choice", choices=[*map(str, range(10)), "R"], default="1").upper()
+    return Prompt.ask("➡️ Choice", choices=["0","1","2","3","4","5","6","7","8","9","T","R","I"], default="1").upper()
+
+def export_menu():
+    console.clear()
+    console.rule("[bold blue]💾 Export Options[/bold blue]")
+    menu = Table(box=SIMPLE)
+    menu.add_column("Key", style="cyan bold", width=3)
+    menu.add_column("Action")
+    menu.add_row("1", "📄 Export to JSON")
+    menu.add_row("2", "📝 Export to CSV")
+    menu.add_row("3", "📊 Export to Excel")
+    menu.add_row("0", "↩️ Back to main menu")
+    console.print(menu)
+    return Prompt.ask("➡️ Choose export format", choices=["0","1","2","3"], default="1")
 
 def main():
+    choose_theme()
+    load_plugins()
     path = Prompt.ask("📂 Path to scan", default=".")
-    exclude = Prompt.ask("🚫 Exclude dirs (comma‑sep)", default="")
-    include = Prompt.ask("✅ Include exts (comma‑sep)", default="")
-    exclude_dirs = set(d.strip() for d in exclude.split(",") if d.strip())
-    include_exts = set(e.strip() for e in include.split(",") if e.strip())
+    exclude = Prompt.ask("🚫 Exclude dirs", default="")
+    include = Prompt.ask("✅ Include exts", default="")
+    exclude_dirs = set(exclude.split(",")) if exclude else set()
+    include_exts = set(include.split(",")) if include else set()
 
+    # Initial scan with timing
+    start_time = time.time()
     stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
+    elapsed = time.time() - start_time
+    
+    # Show summary
+    show_dynamic_summary(elapsed, len(file_stats), stats)
 
     while True:
         choice = interactive_menu()
-        if choice == "0":
-            console.clear()
-            console.print("[bold green]👋 Goodbye![/bold green]")
-            break
-
-        action_map = {
-            "1": ("Summary", print_table, (stats,)),
-            "2": ("Per‑file", print_file_table, (file_stats,)),
-            "3": ("Tree view", generate_tree_view, (file_stats, path)),
-            "4": ("Compare snapshots", compare_snapshots, ()),
-            "5": ("Test coverage", estimate_test_coverage, (file_stats,)),
-            "6": ("Security scan", security_scan, (file_stats, path)),
-            "7": ("Export JSON", export_to_json, (stats,)),
-            "8": ("Export CSV", export_to_csv, (stats,)),
-            "9": ("Export Excel", export_to_excel, (stats,))
-        }
-
-        if choice == "R":
-            console.clear()
-            with console.status("[yellow]🔄 Rescanning… please wait") as st:
-                stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
-            console.print("[green]✅ Rescan complete![/green]")
-        elif choice in action_map:
-            label, func, args = action_map[choice]
-            console.clear()
-            with console.status(f"[bold blue]🔧 {label} in progress…"):
-                func(*args)
-        else:
-            console.print(f"[red]Invalid choice:[/red] {choice}")
-
-        # wait for user, then clear before redrawing menu
-        Prompt.ask("\n[grey]Press Enter to return to menu[/grey]", default="", show_default=False)
         console.clear()
+
+        if choice == "0":
+            break
+        elif choice == "1":
+            print_table(stats)
+        elif choice == "2":
+            print_file_table(file_stats)
+        elif choice == "3":
+            generate_tree_view(file_stats, path)
+        elif choice == "4":
+            fuzzy_search_file(file_stats)
+        elif choice == "5":
+            estimate_test_coverage(file_stats)
+        elif choice == "6":
+            if not os.path.exists(".loc_history"):
+                console.print("[yellow]No snapshots found. Creating first snapshot now.[/yellow]")
+                save_snapshot(stats, file_stats)
+            show_snapshot_timeline()
+        elif choice == "7":
+            compare_snapshots()
+        elif choice == "8":
+            exp_choice = export_menu()
+            if exp_choice == "1":
+                export_to_json(stats, file_stats=file_stats)
+            elif exp_choice == "2":
+                export_to_csv(stats, file_stats=file_stats)
+            elif exp_choice == "3":
+                export_to_excel(stats, file_stats=file_stats)
+        elif choice == "9":
+            security_scan(file_stats, path)
+        elif choice == "T":
+            choose_theme()
+        elif choice == "R":
+            console.print("[yellow]Rescanning directory...[/yellow]")
+            start_time = time.time()
+            stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
+            elapsed = time.time() - start_time
+            show_dynamic_summary(elapsed, len(file_stats), stats)
+        elif choice == "I":
+            console.print(
+                Panel(
+                    f"[bold]Project Status CLI Info[/bold]\n\n"
+                    f"• Path scanned: [cyan]{path}[/cyan]\n"
+                    f"• Files scanned: [cyan]{len(file_stats)}[/cyan]\n"
+                    f"• Languages detected: [cyan]{', '.join(sorted(stats.keys()))}[/cyan]\n"
+                    f"• Available themes: [cyan]{', '.join(THEMES.keys())}[/cyan]\n"
+                    f"• Plugins loaded: [cyan]{', '.join(command_registry.keys()) or 'none'}[/cyan]",
+                    title="ℹ️ Info", box=SIMPLE
+                )
+            )
+
+        if choice != "0":  # Only prompt if not exiting
+            Prompt.ask("\n[grey]Press Enter to return to menu[/grey]", default="")
+            
+    console.clear()
+    console.print("[bold green]👋 Thanks for using Project Status CLI![/bold green]")
 
 if __name__ == "__main__":
     main()

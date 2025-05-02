@@ -801,7 +801,7 @@ def main():
                     f"• Languages detected: [cyan]{', '.join(sorted(stats.keys()))}[/cyan]\n"
                     f"• Available themes: [cyan]{', '.join(THEMES.keys())}[/cyan]\n"
                     f"• Plugins loaded: [cyan]{', '.join(command_registry.keys()) or 'none'}[/cyan]",
-                    title="ℹ️ Info", box=SIMPLE
+                    title="ℹ️  Info", box=SIMPLE
                 )
             )
 

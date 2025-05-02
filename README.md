@@ -125,24 +125,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ```
 📊 Code Statistics by Language
-┌──────────┬────────────┬────────────┬───────────────┬────────────┐
-│ Language │ Code Lines │ Blank Lines │ Comment Lines │ Total Lines │
-├──────────┼────────────┼────────────┼───────────────┼────────────┤
-│ Python   │ 1,234      │ 123        │ 456          │ 1,813      │
-│ JavaScript│ 567       │ 45         │ 89           │ 701        │
-└──────────┴────────────┴────────────┴───────────────┴────────────┘
+┌───────────┬────────────┬────────────┬───────────────┬────────────┐
+│ Language  │ Code Lines │ Blank Lines│ Comment Lines │ Total Lines│
+├───────────┼────────────┼────────────┼───────────────┼────────────┤
+│ Python    │ 1,234      │ 123        │ 456           │ 1,813      │
+│ JavaScript│ 567        │ 45         │ 89            │ 701        │
+└───────────┴────────────┴────────────┴───────────────┴────────────┘
 ```
 
-## 🔮 Future Features
-
-- [ ] Web dashboard for visualization
-- [ ] CI/CD integration
-- [ ] Custom metric plugins
-- [ ] Team collaboration features
-- [ ] Automated code review suggestions
-
-## 📫 Contact
-
-Your Name - [@yourtwitter](https://twitter.com/yourtwitter) - email@example.com
-
-Project Link: [https://github.com/yourusername/project-status-cli](https://github.com/yourusername/project-status-cli)
+Project Link: [https://github.com/yourusername/projectstatuscli](https://github.com/yourusername/projectstatus)

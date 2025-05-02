@@ -9,7 +9,7 @@ from rich.tree import Tree
 from rich.box import SIMPLE
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import FuzzyWordCompleter
-from config import TEST_PATTERNS
+from config import TEST_PATTERNS, EXT_LANG_MAP
 try:
     from radon.complexity import cc_visit
 except ImportError:
@@ -80,7 +80,7 @@ def estimate_test_coverage(file_stats):
     return coverage
 
 def code_quality_metrics(path):
-    """Compute cyclomatic complexity via radon."""
+    """Compute cyclomatic complexity via radon, color‑coded."""
     if not cc_visit:
         console.print("[red]Install radon: pip install radon[/red]")
         return
@@ -88,48 +88,74 @@ def code_quality_metrics(path):
     for root, dirs, files in os.walk(path):
         for fn in files:
             if fn.endswith('.py'):
-                src = open(os.path.join(root, fn), 'r', errors='ignore').read()
-                for b in cc_visit(src):
-                    report.append((fn, b.name, b.complexity, b.lineno))
+                fp = os.path.join(root, fn)
+                try:
+                    src = open(fp, 'r', errors='ignore').read()
+                    for b in cc_visit(src):
+                        report.append((fn, b.name.split('.')[-1], b.complexity, b.lineno))
+                except:
+                    continue
     if not report:
         console.print("[yellow]No Python files found for complexity analysis.[/yellow]")
         return
     table = Table(title="Cyclomatic Complexity (top 20)", box=SIMPLE)
-    table.add_column("File"); table.add_column("Block"); table.add_column("CC", justify="right"); table.add_column("Line", justify="right")
+    table.add_column("File", no_wrap=True)
+    table.add_column("Block", no_wrap=True)
+    table.add_column("CC", justify="right")
+    table.add_column("Line", justify="right")
     for fn, name, cc, ln in sorted(report, key=lambda x: -x[2])[:20]:
-        table.add_row(fn, name, str(cc), str(ln))
+        color = "green" if cc < 5 else "yellow" if cc < 10 else "red"
+        table.add_row(fn, name, f"[{color}]{cc}[/{color}]", str(ln))
     console.print(table)
 
+_js_import_re = re.compile(r"""import\s+(?:.+?\s+from\s+)?['"]([^'"]+)['"]""")
+_js_require_re = re.compile(r"""require\(\s*['"]([^'"]+)['"]\s*\)""")
+
 def dependency_analysis(path):
-    """Build import dependency graph."""
+    """Build import/require dependency graph for Python and JS/TS."""
     G = nx.DiGraph()
     for root, dirs, files in os.walk(path):
         for fn in files:
-            if fn.endswith('.py'):
-                fp = os.path.join(root, fn)
+            ext = os.path.splitext(fn)[1].lower()
+            if ext not in EXT_LANG_MAP:
+                continue
+            fp = os.path.join(root, fn)
+            G.add_node(fn)
+            if ext == '.py':
                 try:
                     tree = ast.parse(open(fp, 'r', errors='ignore').read())
                 except:
                     continue
-                # ensure every file is a node
-                G.add_node(fn)
                 for node in ast.walk(tree):
-                    if isinstance(node, (ast.Import, ast.ImportFrom)):
-                        mod = (node.module or "").split('.')[0]
-                        for alias in getattr(node, 'names', []):
-                            name = alias.name.split('.')[0]
-                            G.add_edge(fn, name if mod == "" else mod)
-
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            mod = alias.name.split('.')[0] + ('.py')
+                            G.add_edge(fn, mod)
+                    elif isinstance(node, ast.ImportFrom):
+                        module = node.module or ""
+                        mod = module.split('.')[0] + ('.py')
+                        G.add_edge(fn, mod)
+            else:  # JS/TS support
+                try:
+                    content = open(fp, 'r', errors='ignore').read()
+                except:
+                    continue
+                for m in _js_import_re.findall(content) + _js_require_re.findall(content):
+                    name = os.path.basename(m)
+                    if not name.endswith(tuple(EXT_LANG_MAP.keys())):
+                        # assume .js if no extension
+                        name = name + ext
+                    G.add_edge(fn, name)
     console.print("[bold]🔗 Dependency Graph (adjacency)[/bold]")
     if not G.nodes:
-        console.print("[yellow]No Python files detected.[/yellow]")
+        console.print("[yellow]No supported files detected.[yellow]")
         return
     for src in sorted(G.nodes):
-        nbrs = sorted(G.adj[src])
+        nbrs = sorted(n for n in G.adj[src] if n in G.nodes)
         if nbrs:
             console.print(f"{src} → {', '.join(nbrs)}")
         else:
-            console.print(f"{src} → (no imports)")
+            console.print(f"{src} → (no deps)")
 
 def generate_tree_view(file_stats, path):
     """Generate a tree view of the project with LOC information."""

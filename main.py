@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
-import os, time, json, csv, configparser, subprocess, signal, importlib, re
+# Standard library imports
+import os
+import time
+import json
+import csv
+import configparser
+import subprocess
+import signal
+import importlib
+import re
 from datetime import datetime
 from collections import defaultdict
+
+# Third-party imports
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress
@@ -14,42 +25,65 @@ from rich.theme import Theme
 from rich.markdown import Markdown
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import FuzzyWordCompleter
+import ast
+import networkx as nx
 
+# Local imports
+from config import EXT_LANG_MAP, COMMENT_SYNTAX, THEMES, TEST_PATTERNS
+from utils.analysis_utils import (
+    estimate_test_coverage,
+    code_quality_metrics,
+    dependency_analysis,
+    generate_tree_view,
+    fuzzy_search_file,
+    advanced_search
+)
+from utils.export_utils import (
+    export_to_json,
+    export_to_csv,
+    export_to_excel,
+    save_snapshot,
+    show_snapshot_timeline,
+    compare_snapshots
+)
+from utils.git_utils import git_integration
+from utils.security_utils import security_scan
+from utils.file_utils import (
+    is_binary,
+    detect_shebang_language,
+    count_lines,
+    scan_directory
+)
+from ui.theme import choose_theme
+from ui.menu import (
+    interactive_menu,
+    export_menu,
+    show_dynamic_summary,
+    show_info
+)
+
+# Initialize console
 console = Console()
-command_registry = {}   # plugin hooks
 
-EXT_LANG_MAP = {
-    '.py': 'Python', '.js': 'JavaScript', '.ts': 'TypeScript', '.jsx': 'JSX',
-    '.tsx': 'TSX', '.java': 'Java', '.c': 'C', '.cpp': 'C++', '.cs': 'C#',
-    '.go': 'Go', '.rs': 'Rust', '.swift': 'Swift', '.kt': 'Kotlin', '.m': 'Objective-C',
-    '.rb': 'Ruby', '.php': 'PHP', '.html': 'HTML', '.css': 'CSS',
-    '.scss': 'Sass', '.vue': 'Vue', '.sh': 'Shell', '.lua': 'Lua'
-}
-
-COMMENT_SYNTAX = {
-    'Python': '#', 'JavaScript': '//', 'TypeScript': '//', 'C++': '//', 'C': '//', 'Java': '//',
-    'C#': '//', 'Go': '//', 'Rust': '//', 'Swift': '//', 'Kotlin': '//', 'Objective-C': '//',
-    'Ruby': '#', 'PHP': '//', 'Shell': '#', 'Lua': '--'
-}
-
-# Globals for storing data across runs
+# Global variables
 current_stats = None
 current_file_stats = None
 current_path = None
+command_registry = {}   # plugin hooks
+
+try:
+    from radon.complexity import cc_visit
+except ImportError:
+    cc_visit = None
 
 # 1) Theme support
-THEMES = {
-    "light": Theme({"info": "black on white", "warning": "yellow"}),
-    "dark":  Theme({"info": "white on black", "warning": "bright_yellow"}),
-    "neon":  Theme({"info": "magenta", "warning": "cyan"}),
-    "matrix":Theme({"info": "green", "warning": "bright_green"}),
-}
 def choose_theme():
     choice = Prompt.ask("🎨 Choose theme", choices=list(THEMES.keys()), default="dark")
     console.theme = THEMES[choice]
 
 # 2) Plugin loader
 def load_plugins():
+    """Load plugin modules from the plugins directory."""
     if not os.path.isdir("plugins"):
         return
     for fn in os.listdir("plugins"):
@@ -96,6 +130,112 @@ def fuzzy_search_file(file_stats):
         console.print(table)
     else:
         console.print(f"[red]No match for {sel}[/]")
+
+# Advanced Search & Filtering
+def advanced_search(file_stats):
+    """Search code by regex across files."""
+    pattern = Prompt.ask("🔎 Enter regex to search")
+    table = Table(title=f"Matches for /{pattern}/", box=SIMPLE)
+    table.add_column("File")
+    table.add_column("Hits", justify="right")
+    for rel, stats in file_stats.items():
+        hits = 0
+        try:
+            with open(os.path.join(current_path, rel), 'r', errors='ignore') as f:
+                for line in f:
+                    if re.search(pattern, line):
+                        hits += 1
+        except:
+            continue
+        if hits:
+            table.add_row(rel, str(hits))
+    console.print(table)
+
+# Code Quality Metrics
+def code_quality_metrics(path):
+    """Compute cyclomatic complexity via radon."""
+    if not cc_visit:
+        console.print("[red]Install radon: pip install radon[/red]")
+        return
+    report = []
+    for root, dirs, files in os.walk(path):
+        for fn in files:
+            if fn.endswith('.py'):
+                fp = os.path.join(root, fn)
+                try:
+                    src = open(fp, 'r', errors='ignore').read()
+                    blocks = cc_visit(src)
+                    for b in blocks:
+                        report.append((fn, b.name, b.complexity, b.lineno))
+                except:
+                    continue
+    table = Table(title="Cyclomatic Complexity (top 20)", box=SIMPLE)
+    table.add_column("File")
+    table.add_column("Block")
+    table.add_column("CC", justify="right")
+    table.add_column("Line", justify="right")
+    for fn, name, cc, ln in sorted(report, key=lambda x: -x[2])[:20]:
+        table.add_row(fn, name, str(cc), str(ln))
+    console.print(table)
+
+# Git Integration
+def git_integration(path):
+    """Show git contributions & churn metrics."""
+    console.print("[bold]👥 Git Contributions[/bold]")
+    contrib = get_git_contributors(path) or []
+    
+    def get_git_contributors(path):
+        """Retrieve a list of contributors from the git repository."""
+        try:
+            result = subprocess.run(
+                ['git', '-C', path, 'shortlog', '-sne', '--all'],
+                stdout=subprocess.PIPE, text=True
+            )
+            contributors = []
+            for line in result.stdout.splitlines():
+                parts = line.strip().split("\t")
+                if len(parts) == 2:
+                    contributors.append(parts[1])
+            return contributors
+        except Exception as e:
+            console.print(f"[red]Error retrieving contributors: {e}[/red]")
+            return []
+    # churn: count commits per file
+    result = subprocess.run(
+        ['git', '-C', path, 'log', '--pretty=format:', '--name-only'],
+        stdout=subprocess.PIPE, text=True
+    )
+    churn = defaultdict(int)
+    for f in result.stdout.splitlines():
+        churn[f] += 1
+    table = Table(title="File Churn (top 10)", box=SIMPLE)
+    table.add_column("File")
+    table.add_column("Commits", justify="right")
+    for f, cnt in sorted(churn.items(), key=lambda x: -x[1])[:10]:
+        table.add_row(f, str(cnt))
+    console.print(table)
+
+# Dependency Analysis
+def dependency_analysis(path):
+    """Build import dependency graph."""
+    G = nx.DiGraph()
+    for root, dirs, files in os.walk(path):
+        for fn in files:
+            if fn.endswith('.py'):
+                fp = os.path.join(root, fn)
+                try:
+                    tree = ast.parse(open(fp, 'r', errors='ignore').read())
+                except:
+                    continue
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.Import, ast.ImportFrom)):
+                        mod = (node.module or "").split('.')[0]
+                        for alias in getattr(node, 'names', []):
+                            name = alias.name.split('.')[0]
+                            G.add_edge(fn, name if mod=="" else mod)
+    console.print("[bold]🔗 Dependency Graph (adjacency)[/bold]")
+    for src, nbrs in G.adjacency():
+        console.print(f"{src} → {', '.join(nbrs)}")
 
 def load_config():
     config = configparser.ConfigParser()
@@ -416,11 +556,11 @@ def save_snapshot(stats, file_stats, timestamp=None):
     
     console.print(f"[green]Snapshot saved at .loc_history/snapshot-{timestamp}.json[/green]")
 
-def compare_snapshots():
+def compare_snapshots(stats, file_stats):
     """Compare current stats with the latest saved snapshot"""
     if not os.path.exists('.loc_history/latest.json'):
         console.print("[yellow]No previous snapshot found. Creating one now.[/yellow]")
-        save_snapshot(current_stats, current_file_stats)
+        save_snapshot(stats, file_stats)
         return
     
     with open('.loc_history/latest.json', 'r') as f:
@@ -440,13 +580,13 @@ def compare_snapshots():
     table.add_column("% Change", justify="right")
     
     # Get all languages from both current and previous
-    all_languages = set(current_stats.keys()) | set(prev_langs.keys())
+    all_languages = set(stats.keys()) | set(prev_langs.keys())
     
     total_prev = total_curr = 0
     
     for lang in all_languages:
         prev_loc = prev_langs.get(lang, {}).get('code', 0)
-        curr_loc = current_stats.get(lang, {'code': 0})['code']
+        curr_loc = stats.get(lang, {'code': 0})['code']
         
         total_prev += prev_loc
         total_curr += curr_loc
@@ -497,7 +637,7 @@ def compare_snapshots():
     
     # Prompt to save current as new snapshot
     if Confirm.ask("Save current stats as new snapshot?"):
-        save_snapshot(current_stats, current_file_stats)
+        save_snapshot(stats, file_stats)
 
 def estimate_test_coverage(file_stats):
     """Heuristic estimation of test coverage based on file paths"""
@@ -696,59 +836,27 @@ def generate_tree_view(file_stats, path):
 
 # 8) Plugin command execution
 def run_plugin(cmd):
+    """Execute a plugin command."""
     if cmd in command_registry:
         command_registry[cmd]()
 
-def interactive_menu():
-    console.clear()
-    console.rule("[bold magenta]🚀 Project Status CLI 🚀[/bold magenta]")
-    menu = Table(box=SIMPLE)
-    menu.add_column("Key", style="cyan bold", width=3)
-    menu.add_column("Action")
-    menu.add_row("1", "📊 Summary table")
-    menu.add_row("2", "📄 Per‑file stats")
-    menu.add_row("3", "🌳 Tree view")
-    menu.add_row("4", "🔍 Fuzzy search file")
-    menu.add_row("5", "📊 Test coverage")  # Added test coverage
-    menu.add_row("6", "📆 Snapshot timeline")
-    menu.add_row("7", "🔄 Compare snapshots")  # Explicitly compare snapshots
-    menu.add_row("8", "💾 Export options")  # Added export submenu
-    menu.add_row("9", "🔒 Security scan")
-    menu.add_row("T", "🎨 Change theme")
-    menu.add_row("R", "🔄 Rescan")
-    menu.add_row("I", "ℹ️ Info")
-    menu.add_row("0", "❌ Exit")
-    console.print(menu)
-    return Prompt.ask("➡️ Choice", choices=["0","1","2","3","4","5","6","7","8","9","T","R","I"], default="1").upper()
-
-def export_menu():
-    console.clear()
-    console.rule("[bold blue]💾 Export Options[/bold blue]")
-    menu = Table(box=SIMPLE)
-    menu.add_column("Key", style="cyan bold", width=3)
-    menu.add_column("Action")
-    menu.add_row("1", "📄 Export to JSON")
-    menu.add_row("2", "📝 Export to CSV")
-    menu.add_row("3", "📊 Export to Excel")
-    menu.add_row("0", "↩️ Back to main menu")
-    console.print(menu)
-    return Prompt.ask("➡️ Choose export format", choices=["0","1","2","3"], default="1")
-
 def main():
+    """Main entry point for the application."""
     choose_theme()
     load_plugins()
+    
+    # Get scan parameters
     path = Prompt.ask("📂 Path to scan", default=".")
     exclude = Prompt.ask("🚫 Exclude dirs", default="")
     include = Prompt.ask("✅ Include exts", default="")
     exclude_dirs = set(exclude.split(",")) if exclude else set()
     include_exts = set(include.split(",")) if include else set()
 
-    # Initial scan with timing
+    # Initial scan
     start_time = time.time()
     stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
     elapsed = time.time() - start_time
     
-    # Show summary
     show_dynamic_summary(elapsed, len(file_stats), stats)
 
     while True:
@@ -773,7 +881,7 @@ def main():
                 save_snapshot(stats, file_stats)
             show_snapshot_timeline()
         elif choice == "7":
-            compare_snapshots()
+            compare_snapshots(stats, file_stats)
         elif choice == "8":
             exp_choice = export_menu()
             if exp_choice == "1":
@@ -784,6 +892,14 @@ def main():
                 export_to_excel(stats, file_stats=file_stats)
         elif choice == "9":
             security_scan(file_stats, path)
+        elif choice == "A":
+            advanced_search(file_stats)
+        elif choice == "Q":
+            code_quality_metrics(path)
+        elif choice == "G":
+            git_integration(path)
+        elif choice == "D":
+            dependency_analysis(path)
         elif choice == "T":
             choose_theme()
         elif choice == "R":
@@ -793,19 +909,9 @@ def main():
             elapsed = time.time() - start_time
             show_dynamic_summary(elapsed, len(file_stats), stats)
         elif choice == "I":
-            console.print(
-                Panel(
-                    f"[bold]Project Status CLI Info[/bold]\n\n"
-                    f"• Path scanned: [cyan]{path}[/cyan]\n"
-                    f"• Files scanned: [cyan]{len(file_stats)}[/cyan]\n"
-                    f"• Languages detected: [cyan]{', '.join(sorted(stats.keys()))}[/cyan]\n"
-                    f"• Available themes: [cyan]{', '.join(THEMES.keys())}[/cyan]\n"
-                    f"• Plugins loaded: [cyan]{', '.join(command_registry.keys()) or 'none'}[/cyan]",
-                    title="ℹ️  Info", box=SIMPLE
-                )
-            )
+            show_info(path, file_stats, stats, command_registry)
 
-        if choice != "0":  # Only prompt if not exiting
+        if choice != "0":
             Prompt.ask("\n[grey]Press Enter to return to menu[/grey]", default="")
             
     console.clear()

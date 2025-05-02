@@ -38,6 +38,7 @@ def interactive_menu():
     menu.add_row("Q", "⚙️  Code quality metrics")
     menu.add_row("G", "🗂️ Git integration")
     menu.add_row("D", "🔗 Dependency analysis")
+    menu.add_row("H", "🏥 Code health analysis")
     menu.add_row("T", "🎨 Change theme")
     menu.add_row("R", "🔄 Rescan")
     menu.add_row("I", "ℹ️ Info")
@@ -45,7 +46,7 @@ def interactive_menu():
     console.print(menu)
     return Prompt.ask(
         "➡️ Choice",
-        choices=["0","1","2","3","4","5","6","7","8","9","A","Q","G","D","T","R","I"],
+        choices=["0","1","2","3","4","5","6","7","8","9","A","Q","G","D","H","T","R","I"],
         default="1"
     ).upper()
 

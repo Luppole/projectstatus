@@ -11,6 +11,8 @@ import importlib
 import re
 from datetime import datetime
 from collections import defaultdict
+from pathlib import Path
+from typing import Dict
 
 # Third-party imports
 from rich.console import Console
@@ -60,6 +62,7 @@ from ui.menu import (
     show_dynamic_summary,
     show_info
 )
+from utils.metrics_utils import analyze_codebase, print_code_health_report
 
 # Initialize console
 console = Console()
@@ -195,14 +198,14 @@ def scan_directory(path, exclude_dirs, include_exts, per_file=True):
         task = progress.add_task("Scanning files...", total=len(files))
         for file_path in files:
             progress.update(task, advance=1)
-            if is_binary_file(file_path):
+            if is_binary_file(Path(file_path)):
                 continue
             ext = os.path.splitext(file_path)[1].lower()
             if include_exts and ext not in include_exts:
                 continue
                 
             # Get file info including language
-            _, _, language = get_file_info(file_path)
+            _, _, language = get_file_info(Path(file_path))
             if not language:
                 continue
             
@@ -735,82 +738,103 @@ def run_plugin(cmd):
     if cmd in command_registry:
         command_registry[cmd]()
 
+def handle_code_health_analysis(file_stats: Dict[str, Dict], path: str) -> None:
+    """Handle code health analysis option."""
+    console.print("\n[bold cyan]🏥 Code Health Analysis[/bold cyan]")
+    console.print("Analyzing code quality, maintainability, and technical debt...\n")
+    
+    results = analyze_codebase(path, file_stats)
+    print_code_health_report(results)
+    
+    console.print("\n[bold green]Press Enter to continue...[/bold green]")
+    input()
+
 def main():
     """Main entry point for the application."""
-    choose_theme()
-    load_plugins()
-    
-    # Get scan parameters
-    path = Prompt.ask("📂 Path to scan", default=".")
-    exclude = Prompt.ask("🚫 Exclude dirs", default="")
-    include = Prompt.ask("✅ Include exts", default="")
-    exclude_dirs = set(exclude.split(",")) if exclude else set()
-    include_exts = set(include.split(",")) if include else set()
+    try:
+        choose_theme()
+        load_plugins()
+        
+        # Get scan parameters
+        path = Prompt.ask("📂 Path to scan", default=".")
+        exclude = Prompt.ask("🚫 Exclude dirs", default="")
+        include = Prompt.ask("✅ Include exts", default="")
+        exclude_dirs = set(exclude.split(",")) if exclude else set()
+        include_exts = set(include.split(",")) if include else set()
 
-    # Initial scan
-    start_time = time.time()
-    stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
-    elapsed = time.time() - start_time
-    
-    show_dynamic_summary(elapsed, len(file_stats), stats)
+        # Initial scan
+        start_time = time.time()
+        stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
+        elapsed = time.time() - start_time
+        
+        show_dynamic_summary(elapsed, len(file_stats), stats)
 
-    while True:
-        choice = interactive_menu()
-        console.clear()
+        while True:
+            choice = interactive_menu()
+            console.clear()
 
-        if choice == "0":
-            break
-        elif choice == "1":
-            print_table(stats)
-        elif choice == "2":
-            print_file_table(file_stats)
-        elif choice == "3":
-            generate_tree_view(file_stats, path)
-        elif choice == "4":
-            fuzzy_search_file(file_stats)
-        elif choice == "5":
-            estimate_test_coverage(file_stats)
-        elif choice == "6":
-            if not os.path.exists(".loc_history"):
-                console.print("[yellow]No snapshots found. Creating first snapshot now.[/yellow]")
-                save_snapshot(stats, file_stats)
-            show_snapshot_timeline()
-        elif choice == "7":
-            compare_snapshots(stats, file_stats)
-        elif choice == "8":
-            exp_choice = export_menu()
-            if exp_choice == "1":
-                export_to_json(stats, file_stats=file_stats)
-            elif exp_choice == "2":
-                export_to_csv(stats, file_stats=file_stats)
-            elif exp_choice == "3":
-                export_to_excel(stats, file_stats=file_stats)
-        elif choice == "9":
-            security_scan(file_stats, path)
-        elif choice == "A":
-            advanced_search(file_stats)
-        elif choice == "Q":
-            code_quality_metrics(path)
-        elif choice == "G":
-            git_integration(path)
-        elif choice == "D":
-            dependency_analysis(path)
-        elif choice == "T":
-            choose_theme()
-        elif choice == "R":
-            console.print("[yellow]Rescanning directory...[/yellow]")
-            start_time = time.time()
-            stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
-            elapsed = time.time() - start_time
-            show_dynamic_summary(elapsed, len(file_stats), stats)
-        elif choice == "I":
-            show_info(path, file_stats, stats, command_registry)
+            if choice == "0":
+                break
+            elif choice == "1":
+                print_table(stats)
+            elif choice == "2":
+                print_file_table(file_stats)
+            elif choice == "3":
+                generate_tree_view(file_stats, path)
+            elif choice == "4":
+                fuzzy_search_file(file_stats)
+            elif choice == "5":
+                estimate_test_coverage(file_stats)
+            elif choice == "6":
+                if not os.path.exists(".loc_history"):
+                    console.print("[yellow]No snapshots found. Creating first snapshot now.[/yellow]")
+                    save_snapshot(stats, file_stats)
+                show_snapshot_timeline()
+            elif choice == "7":
+                compare_snapshots(stats, file_stats)
+            elif choice == "8":
+                exp_choice = export_menu()
+                if exp_choice == "1":
+                    export_to_json(stats, file_stats=file_stats)
+                elif exp_choice == "2":
+                    export_to_csv(stats, file_stats=file_stats)
+                elif exp_choice == "3":
+                    export_to_excel(stats, file_stats=file_stats)
+            elif choice == "9":
+                security_scan(file_stats, path)
+            elif choice == "A":
+                advanced_search(file_stats)
+            elif choice == "Q":
+                code_quality_metrics(path)
+            elif choice == "G":
+                git_integration(path)
+            elif choice == "D":
+                dependency_analysis(path)
+            elif choice == "H":
+                handle_code_health_analysis(file_stats, path)
+            elif choice == "T":
+                choose_theme()
+            elif choice == "R":
+                console.print("[yellow]Rescanning directory...[/yellow]")
+                start_time = time.time()
+                stats, file_stats = scan_directory(path, exclude_dirs, include_exts)
+                elapsed = time.time() - start_time
+                show_dynamic_summary(elapsed, len(file_stats), stats)
+            elif choice == "I":
+                show_info(path, file_stats, stats, command_registry)
 
-        if choice != "0":
-            Prompt.ask("\n[grey]Press Enter to return to menu[/grey]", default="")
+            if choice != "0":
+                Prompt.ask("\n[grey]Press Enter to return to menu[/grey]", default="")
             
-    console.clear()
-    console.print("[bold green]👋 Thanks for using Project Status CLI![/bold green]")
+        console.clear()
+        console.print("[bold green]👋 Thanks for using Project Status CLI![/bold green]")
+        
+    except KeyboardInterrupt:
+        console.print("\n\n[bold yellow]Operation cancelled by user[/bold yellow]")
+    except Exception as e:
+        console.print(f"\n[bold red]Error: {str(e)}[/bold red]")
+        if DEBUG:
+            console.print_exception()
 
 if __name__ == "__main__":
     main()

@@ -72,6 +72,7 @@ current_stats = None
 current_file_stats = None
 current_path = None
 command_registry = {}   # plugin hooks
+DEBUG = False  # Debug mode flag
 
 try:
     from radon.complexity import cc_visit
@@ -743,8 +744,13 @@ def handle_code_health_analysis(file_stats: Dict[str, Dict], path: str) -> None:
     console.print("\n[bold cyan]🏥 Code Health Analysis[/bold cyan]")
     console.print("Analyzing code quality, maintainability, and technical debt...\n")
     
-    results = analyze_codebase(path, file_stats)
-    print_code_health_report(results)
+    try:
+        results = analyze_codebase(path, file_stats)
+        print_code_health_report(results)
+    except Exception as e:
+        console.print(f"[red]Error during code health analysis: {str(e)}[/red]")
+        if DEBUG:
+            console.print_exception()
     
     console.print("\n[bold green]Press Enter to continue...[/bold green]")
     input()

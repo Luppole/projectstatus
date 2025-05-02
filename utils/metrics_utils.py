@@ -2,8 +2,14 @@
 import os
 import ast
 import re
+import json
+import hashlib
+import asyncio
+import aiofiles
+import time
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress
@@ -11,6 +17,104 @@ from rich.box import SIMPLE
 import math
 
 console = Console()
+
+class CodeHealthCache:
+    """Cache for code health analysis results."""
+    
+    def __init__(self, cache_dir: str = ".projectstatus/cache"):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        
+    def _get_cache_path(self, file_path: Path) -> Path:
+        """Get cache file path for a given file."""
+        file_hash = hashlib.md5(str(file_path).encode()).hexdigest()
+        return self.cache_dir / f"health_{file_hash}.json"
+        
+    def _get_file_hash(self, file_path: Path) -> str:
+        """Get hash of file contents and modification time."""
+        stat = file_path.stat()
+        return hashlib.md5(f"{stat.st_mtime}:{stat.st_size}".encode()).hexdigest()
+        
+    def get_cached_health(self, file_path: Path) -> Optional[Dict[str, Any]]:
+        """Get cached health metrics if they exist and are valid."""
+        cache_path = self._get_cache_path(file_path)
+        if not cache_path.exists():
+            return None
+            
+        try:
+            with open(cache_path, 'r') as f:
+                cache_data = json.load(f)
+                
+            # Check if file has changed
+            if cache_data.get('file_hash') != self._get_file_hash(file_path):
+                return None
+                
+            return cache_data.get('health_metrics')
+        except Exception:
+            return None
+            
+    def save_health_metrics(self, file_path: Path, health_metrics: Dict[str, Any]) -> None:
+        """Save health metrics to cache."""
+        cache_path = self._get_cache_path(file_path)
+        cache_data = {
+            'file_hash': self._get_file_hash(file_path),
+            'health_metrics': health_metrics,
+            'timestamp': time.time()
+        }
+        
+        with open(cache_path, 'w') as f:
+            json.dump(cache_data, f)
+            
+    def clear_cache(self) -> None:
+        """Clear all cached health metrics."""
+        for cache_file in self.cache_dir.glob("health_*.json"):
+            cache_file.unlink()
+
+class ParallelAnalyzer:
+    """Parallel code health analyzer."""
+    
+    def __init__(self, max_workers: Optional[int] = None, use_processes: bool = True):
+        self.max_workers = max_workers or os.cpu_count()
+        self.use_processes = use_processes
+        self.executor = ProcessPoolExecutor(max_workers=self.max_workers) if use_processes else ThreadPoolExecutor(max_workers=self.max_workers)
+        
+    async def analyze_file(self, file_path: Path, language: str) -> Tuple[str, Dict[str, Any]]:
+        """Analyze a single file's health metrics."""
+        try:
+            health = calculate_code_health(file_path, language)
+            return str(file_path), health
+        except Exception as e:
+            console.print(f"[red]Error analyzing {file_path}: {str(e)}[/red]")
+            return str(file_path), {}
+            
+    async def analyze_files(self, base_path: Path, files: List[str], cache: CodeHealthCache) -> Dict[str, Dict[str, Any]]:
+        """Analyze multiple files in parallel."""
+        results = {}
+        
+        for rel_path in files:
+            file_path = base_path / rel_path
+            language = 'Python'  # We're focusing on Python files for now
+            
+            # Check cache first
+            cached_health = cache.get_cached_health(file_path)
+            if cached_health:
+                results[rel_path] = cached_health
+                continue
+                
+            # Analyze file
+            try:
+                health = calculate_code_health(file_path, language)
+                results[rel_path] = health
+                cache.save_health_metrics(file_path, health)
+            except Exception as e:
+                console.print(f"[red]Error analyzing {rel_path}: {str(e)}[/red]")
+                continue
+                
+        return results
+        
+    def __del__(self):
+        """Cleanup executor on deletion."""
+        self.executor.shutdown(wait=False)
 
 def calculate_maintainability_index(cc: float, loc: int, comments: int) -> float:
     """Calculate the maintainability index using the standard formula.
@@ -139,77 +243,95 @@ def calculate_code_health(file_path: Path, language: str) -> Dict[str, float]:
         'technical_debt': debt
     }
 
-def analyze_codebase(path: str, file_stats: Dict[str, Dict]) -> Dict[str, any]:
-    """Analyze the entire codebase for code health and technical debt.
+def analyze_codebase(path: str, file_stats: Dict[str, Dict]) -> Dict:
+    """Analyze codebase for health and technical debt."""
+    console = Console()
+    cache = CodeHealthCache()
+    analyzer = ParallelAnalyzer()
     
-    Args:
-        path: Root path of the codebase
-        file_stats: Dictionary of file statistics
-        
-    Returns:
-        Dictionary with codebase analysis results
-    """
-    results = {
-        'files_analyzed': 0,
-        'total_debt': 0,
-        'average_health': 0,
-        'language_stats': {},
-        'worst_files': [],
-        'best_files': []
-    }
+    # Convert path to Path object
+    base_path = Path(path)
     
-    file_health_scores = []
+    # Get all Python files
+    files_to_analyze = []
+    for rel_path, stats in file_stats.items():
+        if stats.get('language') == 'Python' and not stats.get('is_binary', False):
+            # Convert to relative path if needed
+            if Path(rel_path).is_absolute():
+                try:
+                    rel_path = str(Path(rel_path).relative_to(base_path))
+                except ValueError:
+                    continue
+            files_to_analyze.append(rel_path)
     
+    if not files_to_analyze:
+        return {
+            'overall': {
+                'health_score': 0,
+                'technical_debt': 0,
+                'maintainability': 0,
+                'total_files': 0
+            },
+            'languages': {},
+            'best_files': [],
+            'worst_files': []
+        }
+    
+    # Analyze files in parallel
     with Progress() as progress:
-        task = progress.add_task("[cyan]Analyzing code health...", total=len(file_stats))
+        task = progress.add_task("[cyan]Analyzing code health...", total=len(files_to_analyze))
         
-        for rel_path, stats in file_stats.items():
-            progress.update(task, advance=1)
-            
-            file_path = Path(path) / rel_path
-            language = stats['language']
-            
-            # Skip binary and non-code files
-            if not language or language in ('Binary', 'Text', 'Markdown'):
-                continue
-                
-            # Calculate health metrics
-            health = calculate_code_health(file_path, language)
-            
-            # Update language stats
-            if language not in results['language_stats']:
-                results['language_stats'][language] = {
-                    'files': 0,
-                    'total_debt': 0,
-                    'average_health': 0,
-                    'total_loc': 0
-                }
-            
-            lang_stats = results['language_stats'][language]
-            lang_stats['files'] += 1
-            lang_stats['total_debt'] += health['technical_debt']['total_debt']
-            lang_stats['total_loc'] += health['technical_debt']['code_lines']
-            
-            # Track file scores
-            file_health_scores.append((rel_path, health['overall_health']))
-            results['total_debt'] += health['technical_debt']['total_debt']
-            results['files_analyzed'] += 1
+        async def analyze_files():
+            results = await analyzer.analyze_files(base_path, files_to_analyze, cache)
+            progress.update(task, completed=len(files_to_analyze))
+            return results
+        
+        results = asyncio.run(analyze_files())
     
-    # Calculate averages and sort files
-    if results['files_analyzed'] > 0:
-        results['average_health'] = sum(score for _, score in file_health_scores) / len(file_health_scores)
-        
-        # Sort files by health score
-        file_health_scores.sort(key=lambda x: x[1])
-        results['worst_files'] = file_health_scores[:5]  # 5 worst files
-        results['best_files'] = file_health_scores[-5:][::-1]  # 5 best files
-        
-        # Calculate language averages
-        for lang_stats in results['language_stats'].values():
-            if lang_stats['files'] > 0:
-                lang_stats['average_health'] = 100 - (lang_stats['total_debt'] / lang_stats['files'] * 10)
+    # Calculate overall metrics
+    total_files = len(results)
+    if total_files == 0:
+        return {
+            'overall': {
+                'health_score': 0,
+                'technical_debt': 0,
+                'maintainability': 0,
+                'total_files': 0
+            },
+            'languages': {},
+            'best_files': [],
+            'worst_files': []
+        }
     
-    return results
+    # Calculate averages
+    avg_health = sum(r['overall_health'] for r in results.values()) / total_files
+    avg_debt = sum(r['technical_debt']['total_debt'] for r in results.values()) / total_files
+    avg_maintainability = sum(r['technical_debt']['maintainability_index'] for r in results.values()) / total_files
+    
+    # Sort files by health score
+    sorted_files = sorted(
+        results.items(),
+        key=lambda x: x[1]['overall_health'],
+        reverse=True
+    )
+    
+    return {
+        'overall': {
+            'health_score': avg_health,
+            'technical_debt': avg_debt,
+            'maintainability': avg_maintainability,
+            'total_files': total_files
+        },
+        'languages': {
+            'Python': {
+                'files': total_files,
+                'avg_health': avg_health,
+                'avg_debt': avg_debt
+            }
+        },
+        'best_files': sorted_files[:5],
+        'worst_files': sorted_files[-5:]
+    }
 
 def print_code_health_report(results: Dict[str, any]) -> None:
     """Print a detailed code health report.
@@ -224,28 +346,27 @@ def print_code_health_report(results: Dict[str, any]) -> None:
     table.add_column("Metric", style="cyan")
     table.add_column("Value", justify="right")
     
-    table.add_row("Files Analyzed", str(results['files_analyzed']))
-    table.add_row("Average Health", f"{results['average_health']:.1f}%")
-    table.add_row("Total Technical Debt", f"{results['total_debt']:.1f}")
+    table.add_row("Files Analyzed", str(results['overall']['total_files']))
+    table.add_row("Average Health", f"{results['overall']['health_score']:.1f}%")
+    table.add_row("Total Technical Debt", f"{results['overall']['technical_debt']:.1f}")
+    table.add_row("Average Maintainability", f"{results['overall']['maintainability']:.1f}")
     
     console.print(table)
     
     # Language breakdown
-    if results['language_stats']:
+    if results['languages']:
         table = Table(title="Language Statistics", box=SIMPLE)
         table.add_column("Language", style="cyan")
         table.add_column("Files", justify="right")
-        table.add_column("LOC", justify="right")
         table.add_column("Avg Health", justify="right")
-        table.add_column("Total Debt", justify="right")
+        table.add_column("Avg Debt", justify="right")
         
-        for lang, stats in sorted(results['language_stats'].items()):
+        for lang, stats in sorted(results['languages'].items()):
             table.add_row(
                 lang,
                 str(stats['files']),
-                str(stats['total_loc']),
-                f"{stats['average_health']:.1f}%",
-                f"{stats['total_debt']:.1f}"
+                f"{stats['avg_health']:.1f}%",
+                f"{stats['avg_debt']:.1f}"
             )
         
         console.print(table)
@@ -256,8 +377,8 @@ def print_code_health_report(results: Dict[str, any]) -> None:
         table.add_column("File", style="cyan")
         table.add_column("Health Score", justify="right")
         
-        for file, score in results['best_files']:
-            table.add_row(file, f"{score:.1f}%")
+        for file, metrics in results['best_files']:
+            table.add_row(file, f"{metrics['overall_health']:.1f}%")
         
         console.print(table)
     
@@ -266,7 +387,7 @@ def print_code_health_report(results: Dict[str, any]) -> None:
         table.add_column("File", style="cyan")
         table.add_column("Health Score", justify="right")
         
-        for file, score in results['worst_files']:
-            table.add_row(file, f"{score:.1f}%")
+        for file, metrics in results['worst_files']:
+            table.add_row(file, f"{metrics['overall_health']:.1f}%")
         
         console.print(table) 

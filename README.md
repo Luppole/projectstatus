@@ -5,7 +5,7 @@
 [![Code Style](https://img.shields.io/badge/code%20style-black-black)](https://github.com/psf/black)
 [![Lines of Code](https://img.shields.io/badge/lines%20of%20code-1.2k-blue)](https://github.com/yourusername/project-status-cli)
 
-A powerful command-line tool for analyzing and visualizing your project's codebase. Get instant insights into your code quality, test coverage, and project structure.
+A powerful command-line tool for analyzing and monitoring your project's health, code quality, and development metrics.
 
 ## ✨ Features
 
@@ -33,6 +33,12 @@ A powerful command-line tool for analyzing and visualizing your project's codeba
 - **🎨 Theme Support**: Multiple color themes (dark, light, neon, matrix)
 - **🔌 Plugin System**: Extend functionality with custom plugins
 - **⏳ Progress Bars**: Visual feedback for long-running operations
+
+### 🧪 Code Health Analysis
+- **🏥 Health Metrics**: Overall code health score and detailed metrics
+- **📈 Technical Debt**: Estimation of technical debt and maintainability
+- **🔄 Incremental Analysis**: Smart caching for faster repeated analysis
+- **⚡ Parallel Processing**: Efficient analysis of large codebases
 
 ## 🛠️ Installation
 

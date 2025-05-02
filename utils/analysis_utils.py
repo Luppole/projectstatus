@@ -10,6 +10,10 @@ from rich.box import SIMPLE
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import FuzzyWordCompleter
 from config import TEST_PATTERNS
+try:
+    from radon.complexity import cc_visit
+except ImportError:
+    cc_visit = None
 
 console = Console()
 
@@ -77,30 +81,21 @@ def estimate_test_coverage(file_stats):
 
 def code_quality_metrics(path):
     """Compute cyclomatic complexity via radon."""
-    try:
-        from radon.complexity import cc_visit
-    except ImportError:
+    if not cc_visit:
         console.print("[red]Install radon: pip install radon[/red]")
         return
-    
     report = []
     for root, dirs, files in os.walk(path):
         for fn in files:
             if fn.endswith('.py'):
-                fp = os.path.join(root, fn)
-                try:
-                    src = open(fp, 'r', errors='ignore').read()
-                    blocks = cc_visit(src)
-                    for b in blocks:
-                        report.append((fn, b.name, b.complexity, b.lineno))
-                except:
-                    continue
-    
+                src = open(os.path.join(root, fn), 'r', errors='ignore').read()
+                for b in cc_visit(src):
+                    report.append((fn, b.name, b.complexity, b.lineno))
+    if not report:
+        console.print("[yellow]No Python files found for complexity analysis.[/yellow]")
+        return
     table = Table(title="Cyclomatic Complexity (top 20)", box=SIMPLE)
-    table.add_column("File")
-    table.add_column("Block")
-    table.add_column("CC", justify="right")
-    table.add_column("Line", justify="right")
+    table.add_column("File"); table.add_column("Block"); table.add_column("CC", justify="right"); table.add_column("Line", justify="right")
     for fn, name, cc, ln in sorted(report, key=lambda x: -x[2])[:20]:
         table.add_row(fn, name, str(cc), str(ln))
     console.print(table)
@@ -116,16 +111,25 @@ def dependency_analysis(path):
                     tree = ast.parse(open(fp, 'r', errors='ignore').read())
                 except:
                     continue
+                # ensure every file is a node
+                G.add_node(fn)
                 for node in ast.walk(tree):
                     if isinstance(node, (ast.Import, ast.ImportFrom)):
                         mod = (node.module or "").split('.')[0]
                         for alias in getattr(node, 'names', []):
                             name = alias.name.split('.')[0]
-                            G.add_edge(fn, name if mod=="" else mod)
-    
+                            G.add_edge(fn, name if mod == "" else mod)
+
     console.print("[bold]🔗 Dependency Graph (adjacency)[/bold]")
-    for src, nbrs in G.adjacency():
-        console.print(f"{src} → {', '.join(nbrs)}")
+    if not G.nodes:
+        console.print("[yellow]No Python files detected.[/yellow]")
+        return
+    for src in sorted(G.nodes):
+        nbrs = sorted(G.adj[src])
+        if nbrs:
+            console.print(f"{src} → {', '.join(nbrs)}")
+        else:
+            console.print(f"{src} → (no imports)")
 
 def generate_tree_view(file_stats, path):
     """Generate a tree view of the project with LOC information."""
@@ -192,4 +196,4 @@ def advanced_search(file_stats):
             continue
         if hits:
             table.add_row(rel, str(hits))
-    console.print(table) 
+    console.print(table)

@@ -94,4 +94,3 @@ def test_cli_scan_with_symlinks(test_dir, tmp_path):
                           capture_output=True, text=True)
     assert result.returncode == 0
     assert 'Python' in result.stdout
-``` 

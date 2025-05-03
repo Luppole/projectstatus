@@ -146,16 +146,23 @@ def dependency_analysis(path):
                         # assume .js if no extension
                         name = name + ext
                     G.add_edge(fn, name)
-    console.print("[bold]🔗 Dependency Graph (adjacency)[/bold]")
+    
+    console.print("[bold]🔗 Dependency Graph[/bold]")
     if not G.nodes:
         console.print("[yellow]No supported files detected.[/yellow]")
         return
+    
+    # Create a table for dependencies
+    table = Table(title="File Dependencies", box=SIMPLE)
+    table.add_column("Source File", style="cyan")
+    table.add_column("Dependencies")
+    
     for src in sorted(G.nodes):
         nbrs = sorted(n for n in G.adj[src] if n in G.nodes)
-        if nbrs:
-            console.print(f"{src} → {', '.join(nbrs)}")
-        else:
-            console.print(f"{src} → (no deps)")
+        deps = ", ".join(nbrs) if nbrs else "(no deps)"
+        table.add_row(src, deps)
+            
+    console.print(table)
 
 def generate_tree_view(file_stats, path):
     """Generate a tree view of the project with LOC information."""
@@ -205,9 +212,9 @@ def fuzzy_search_file(file_stats):
     else:
         console.print(f"[red]No match for {sel}[/]")
 
-def advanced_search(file_stats):
+def advanced_search(file_stats, current_path):
     """Search code by regex across files."""
-    pattern = Prompt.ask("🔎 Enter regex to search")
+    pattern = prompt("🔎 Enter regex to search: ")
     table = Table(title=f"Matches for /{pattern}/", box=SIMPLE)
     table.add_column("File")
     table.add_column("Hits", justify="right")
@@ -223,3 +230,70 @@ def advanced_search(file_stats):
         if hits:
             table.add_row(rel, str(hits))
     console.print(table)
+
+def display_language_stats(file_stats):
+    """Display language statistics with a pie chart."""
+    # First, ensure you have plotext installed
+    try:
+        import plotext as plt
+        console.print("[green]✓ Plotext library loaded successfully[/green]")
+    except ImportError:
+        console.print("[yellow]⚠ Install plotext for pie charts: pip install plotext[/yellow]")
+        plt = None
+    
+    from rich.panel import Panel
+    
+    # Calculate lines of code per language
+    lang_stats = {}
+    for file_path, stats in file_stats.items():
+        lang = stats.get('language', 'Unknown')
+        if lang not in lang_stats:
+            lang_stats[lang] = {'files': 0, 'code': 0, 'blank': 0, 'comments': 0}
+        lang_stats[lang]['files'] += 1
+        lang_stats[lang]['code'] += stats.get('code', 0)
+        lang_stats[lang]['blank'] += stats.get('blank', 0)
+        lang_stats[lang]['comments'] += stats.get('comments', 0)
+    
+    # Create a table for language stats
+    table = Table(title="Language Statistics", box=SIMPLE)
+    table.add_column("Language", style="cyan")
+    table.add_column("Files", justify="right")
+    table.add_column("Code Lines", justify="right")
+    table.add_column("Blank Lines", justify="right")
+    table.add_column("Comments", justify="right")
+    table.add_column("Total Lines", justify="right")
+    
+    languages = []
+    code_counts = []
+    
+    for lang, stats in sorted(lang_stats.items(), key=lambda x: x[1]['code'], reverse=True):
+        total = stats['code'] + stats['blank'] + stats['comments']
+        table.add_row(
+            lang,
+            str(stats['files']),
+            str(stats['code']),
+            str(stats['blank']),
+            str(stats['comments']),
+            str(total)
+        )
+        # Only include non-zero values in the pie chart
+        if stats['code'] > 0:
+            languages.append(lang)
+            code_counts.append(stats['code'])
+    
+    # Display language statistics table
+    console.print(table)
+    
+    # Create a pie chart using plotext if available
+    if plt:
+        try:
+            plt.clf()
+            plt.theme("dracula")
+            console.print("[green]✓ Creating pie chart...[/green]")
+            plt.pie(code_counts, labels=languages, title="Code Distribution by Language")
+            chart = plt.build()
+            console.print(Panel(chart, title="[bold]LOC by Language[/bold]"))
+        except Exception as e:
+            console.print(f"[red]❌ Error generating pie chart: {str(e)}[/red]")
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")

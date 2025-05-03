@@ -233,14 +233,14 @@ def advanced_search(file_stats, current_path):
 
 def display_language_stats(file_stats):
     """Display language statistics with a pie chart."""
-    # First, ensure you have plotext installed
+    # Import plotext as plt, or disable if missing
     try:
         import plotext as plt
         console.print("[green]✓ Plotext library loaded successfully[/green]")
     except ImportError:
         console.print("[yellow]⚠ Install plotext for pie charts: pip install plotext[/yellow]")
         plt = None
-    
+
     from rich.panel import Panel
     
     # Calculate lines of code per language
@@ -294,6 +294,6 @@ def display_language_stats(file_stats):
             chart = plt.build()
             console.print(Panel(chart, title="[bold]LOC by Language[/bold]"))
         except Exception as e:
-            console.print(f"[red]❌ Error generating pie chart: {str(e)}[/red]")
+            console.print(f"[red]❌ Error generating pie chart: {e}[/red]")
             import traceback
             console.print(f"[dim]{traceback.format_exc()}[/dim]")

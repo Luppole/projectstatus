@@ -112,11 +112,26 @@ def code_quality_metrics(path):
         table.add_row(fn, name, f"[{color}]{cc}[/{color}]", str(ln))
     console.print(table)
     
-    # NEW: Code smell detection
+    # Code smell detection
     detect_code_smells(path)
     
-    # NEW: Duplicate code detection  
+    # Duplicate code detection  
     detect_duplicate_code(path)
+    
+    # Get the current directory to extract file statistics
+    current_path = os.getcwd()
+    file_stats = {}
+    
+    # Build a minimal file_stats dict for the new features
+    for root, dirs, files in os.walk(path):
+        for fn in files:
+            if fn.endswith('.py'):
+                rel_path = os.path.relpath(os.path.join(root, fn), current_path)
+                file_stats[rel_path] = {'language': 'Python'}
+    
+    # Run new features
+    suggest_refactoring(file_stats, path)
+    analyze_documentation_coverage(file_stats, path)
 
 def detect_code_smells(path):
     """Detect various code smells beyond cyclomatic complexity."""
@@ -328,6 +343,405 @@ def detect_duplicate_code(path, min_lines=5):
             console.print(f"```\n{code_snippet}\n```")
     else:
         console.print("[green]No significant duplicate code detected.[/green]")
+
+def suggest_refactoring(file_stats, path):
+    """Provide automated refactoring suggestions based on detected code issues.
+    
+    Args:
+        file_stats: Dictionary with file statistics information
+        path: Path to the project directory
+        
+    Returns:
+        Dictionary with refactoring suggestions by file
+    """
+    console.print("\n[bold cyan]🔄 Automated Refactoring Suggestions[/bold cyan]")
+    
+    # Dict to store refactoring suggestions
+    suggestions = {}
+    
+    # Get code smells first
+    smells = []
+    for root, dirs, files in os.walk(path):
+        for fn in files:
+            if not fn.endswith('.py'):
+                continue
+                
+            fp = os.path.join(root, fn)
+            try:
+                # Parse the file
+                with open(fp, 'r', errors='ignore') as f:
+                    src = f.read()
+                tree = ast.parse(src)
+                
+                # Define thresholds (same as in detect_code_smells)
+                LONG_METHOD_THRESHOLD = 50
+                LARGE_CLASS_THRESHOLD = 10
+                MANY_PARAMS_THRESHOLD = 5
+                DEEP_NESTING_THRESHOLD = 4
+                
+                file_suggestions = []
+                
+                # Check for various code smells and provide refactoring suggestions
+                for node in ast.walk(tree):
+                    # Long methods/functions
+                    if isinstance(node, ast.FunctionDef):
+                        end_line = getattr(node, 'end_lineno', 0) or 0
+                        lines_count = end_line - node.lineno
+                        
+                        if lines_count > LONG_METHOD_THRESHOLD:
+                            suggestion = {
+                                'issue': f"Long method '{node.name}' ({lines_count} lines)",
+                                'line': node.lineno,
+                                'recommendation': "Extract smaller, focused methods from this long function.",
+                                'refactoring_type': 'extract_method',
+                                'example': f"# Instead of one long method\ndef {node.name}(...):\n    # 50+ lines of code\n\n# Split into smaller methods\ndef {node.name}(...):\n    result1 = do_first_thing(...)\n    result2 = do_second_thing(...)\n    return combine_results(result1, result2)\n\ndef do_first_thing(...):\n    # ~15-20 lines\n\ndef do_second_thing(...):\n    # ~15-20 lines"
+                            }
+                            file_suggestions.append(suggestion)
+                        
+                        # Too many parameters
+                        param_count = len(node.args.args)
+                        if param_count > MANY_PARAMS_THRESHOLD:
+                            param_names = [a.arg for a in node.args.args if a.arg != 'self']
+                            suggestion = {
+                                'issue': f"Too many parameters in '{node.name}' ({param_count} params)",
+                                'line': node.lineno,
+                                'recommendation': "Use a configuration object or data class to group related parameters.",
+                                'refactoring_type': 'introduce_parameter_object',
+                                'example': f"# Instead of many parameters\ndef {node.name}({', '.join(param_names[:3])}, ...):\n    # method body\n\n# Use a configuration object\nfrom dataclasses import dataclass\n\n@dataclass\nclass {node.name.capitalize()}Config:\n    {param_names[0]}: type\n    {param_names[1]}: type\n    # ...\n\ndef {node.name}(config: {node.name.capitalize()}Config):\n    # Use config.{param_name}"
+                            }
+                            file_suggestions.append(suggestion)
+                    
+                    # Large classes
+                    elif isinstance(node, ast.ClassDef):
+                        method_count = sum(1 for n in ast.walk(node) 
+                                          if isinstance(n, ast.FunctionDef))
+                        if method_count > LARGE_CLASS_THRESHOLD:
+                            suggestion = {
+                                'issue': f"Large class '{node.name}' ({method_count} methods)",
+                                'line': node.lineno,
+                                'recommendation': "Split into smaller, more focused classes following the Single Responsibility Principle.",
+                                'refactoring_type': 'extract_class',
+                                'example': f"# Instead of one large class\nclass {node.name}:\n    # Many methods handling different responsibilities\n\n# Split into multiple focused classes\nclass {node.name}Core:\n    # Core functionality\n\nclass {node.name}Helper:\n    # Helper functions\n\nclass {node.name}IO:\n    # I/O operations"
+                            }
+                            file_suggestions.append(suggestion)
+                    
+                    # Deeply nested code
+                    elif isinstance(node, (ast.For, ast.While, ast.If)) and hasattr(node, 'parent'):
+                        depth = 0
+                        current = node
+                        while hasattr(current, 'parent'):
+                            if isinstance(current.parent, (ast.For, ast.While, ast.If)):
+                                depth += 1
+                            current = current.parent
+                        
+                        if depth > DEEP_NESTING_THRESHOLD:
+                            suggestion = {
+                                'issue': f"Deeply nested code (depth {depth})",
+                                'line': node.lineno,
+                                'recommendation': "Extract nested blocks into separate methods or use early returns to reduce nesting.",
+                                'refactoring_type': 'extract_method',
+                                'example': f"# Instead of deep nesting\nif condition1:\n    # code\n    if condition2:\n        # more code\n        if condition3:\n            # even more code\n\n# Use early returns or guard clauses\nif not condition1:\n    return\n# code\nif not condition2:\n    return\n# more code\nif not condition3:\n    return\n# even more code"
+                            }
+                            file_suggestions.append(suggestion)
+                
+                if file_suggestions:
+                    suggestions[fn] = file_suggestions
+                    
+            except Exception as e:
+                if os.environ.get('DEBUG'):
+                    console.print(f"[dim]Error analyzing {fn}: {str(e)}[/dim]")
+                continue
+    
+    # Display refactoring suggestions
+    if suggestions:
+        table = Table(title="Refactoring Suggestions")
+        table.add_column("File")
+        table.add_column("Line", justify="right")
+        table.add_column("Issue")
+        table.add_column("Recommendation")
+        
+        suggestion_count = 0
+        for file, file_suggestions in sorted(suggestions.items()):
+            for i, suggestion in enumerate(file_suggestions):
+                table.add_row(
+                    file if i == 0 else "",
+                    str(suggestion['line']),
+                    suggestion['issue'],
+                    suggestion['recommendation']
+                )
+                suggestion_count += 1
+                
+                # Show examples for the first occurrence of each refactoring type
+                if i == 0:
+                    table.add_row(
+                        "", "", "",
+                        f"[dim cyan]Example:[/dim cyan]\n[dim]{suggestion['example']}[/dim]"
+                    )
+        
+        console.print(table)
+        console.print(f"[yellow]Found {suggestion_count} refactoring opportunities across {len(suggestions)} files.[/yellow]")
+    else:
+        console.print("[green]No significant refactoring opportunities detected.[/green]")
+    
+    return suggestions
+
+def analyze_documentation_coverage(file_stats, path):
+    """Analyze documentation coverage across the codebase.
+    
+    Args:
+        file_stats: Dictionary with file statistics information
+        path: Path to the project directory
+        
+    Returns:
+        Dictionary with documentation coverage metrics
+    """
+    console.print("\n[bold cyan]📚 Documentation Coverage Analysis[/bold cyan]")
+    
+    # Store documentation metrics
+    doc_metrics = {
+        'total_functions': 0,
+        'documented_functions': 0,
+        'total_classes': 0,
+        'documented_classes': 0,
+        'total_modules': 0,
+        'documented_modules': 0,
+        'files': {}
+    }
+    
+    # Process each Python file
+    for root, dirs, files in os.walk(path):
+        for fn in files:
+            if not fn.endswith('.py'):
+                continue
+            
+            fp = os.path.join(root, fn)
+            file_metrics = {
+                'functions': {'total': 0, 'documented': 0},
+                'classes': {'total': 0, 'documented': 0},
+                'module_docstring': False,
+                'doc_coverage': 0.0,
+                'quality_score': 0.0,
+                'missing_docs': []
+            }
+            
+            try:
+                # Parse the file
+                with open(fp, 'r', errors='ignore') as f:
+                    source = f.read()
+                tree = ast.parse(source)
+                
+                # Check for module docstring
+                module_docstring = ast.get_docstring(tree)
+                file_metrics['module_docstring'] = bool(module_docstring)
+                if module_docstring:
+                    doc_metrics['documented_modules'] += 1
+                else:
+                    file_metrics['missing_docs'].append(('module', 'Module', 1))
+                
+                doc_metrics['total_modules'] += 1
+                
+                # Process classes and functions
+                for node in ast.walk(tree):
+                    # Check classes
+                    if isinstance(node, ast.ClassDef):
+                        file_metrics['classes']['total'] += 1
+                        doc_metrics['total_classes'] += 1
+                        
+                        class_docstring = ast.get_docstring(node)
+                        if class_docstring:
+                            file_metrics['classes']['documented'] += 1
+                            doc_metrics['documented_classes'] += 1
+                            
+                            # Basic quality check
+                            quality = evaluate_docstring_quality(class_docstring)
+                            file_metrics['quality_score'] += quality
+                        else:
+                            file_metrics['missing_docs'].append(('class', node.name, node.lineno))
+                    
+                    # Check functions/methods        
+                    elif isinstance(node, ast.FunctionDef):
+                        # Skip special methods like __init__
+                        if not node.name.startswith('__') or node.name.endswith('__'):
+                            file_metrics['functions']['total'] += 1
+                            doc_metrics['total_functions'] += 1
+                            
+                            func_docstring = ast.get_docstring(node)
+                            if func_docstring:
+                                file_metrics['functions']['documented'] += 1
+                                doc_metrics['documented_functions'] += 1
+                                
+                                # Basic quality check
+                                quality = evaluate_docstring_quality(func_docstring)
+                                file_metrics['quality_score'] += quality
+                            else:
+                                file_metrics['missing_docs'].append(('function', node.name, node.lineno))
+                
+                # Calculate file coverage percentage
+                total_items = file_metrics['classes']['total'] + file_metrics['functions']['total'] + 1  # +1 for module
+                documented_items = file_metrics['classes']['documented'] + file_metrics['functions']['documented']
+                documented_items += 1 if file_metrics['module_docstring'] else 0
+                
+                if total_items > 0:
+                    file_metrics['doc_coverage'] = (documented_items / total_items) * 100
+                    
+                    # Normalize quality score
+                    if documented_items > 0:
+                        file_metrics['quality_score'] = file_metrics['quality_score'] / documented_items
+                    else:
+                        file_metrics['quality_score'] = 0
+                
+                doc_metrics['files'][fn] = file_metrics
+                
+            except Exception as e:
+                if os.environ.get('DEBUG'):
+                    console.print(f"[dim]Error analyzing documentation in {fn}: {str(e)}[/dim]")
+                continue
+    
+    # Calculate overall metrics
+    total_items = doc_metrics['total_classes'] + doc_metrics['total_functions'] + doc_metrics['total_modules']
+    documented_items = doc_metrics['documented_classes'] + doc_metrics['documented_functions'] + doc_metrics['documented_modules']
+    
+    overall_coverage = 0
+    if total_items > 0:
+        overall_coverage = (documented_items / total_items) * 100
+    
+    doc_metrics['overall_coverage'] = overall_coverage
+    
+    # Display documentation coverage
+    table = Table(title="Documentation Coverage Summary")
+    table.add_column("Type", style="cyan")
+    table.add_column("Total", justify="right")
+    table.add_column("Documented", justify="right")
+    table.add_column("Coverage", justify="right")
+    
+    # Add rows for modules, classes, and functions
+    table.add_row(
+        "Modules",
+        str(doc_metrics['total_modules']),
+        str(doc_metrics['documented_modules']),
+        format_percentage(doc_metrics['total_modules'], doc_metrics['documented_modules'])
+    )
+    
+    table.add_row(
+        "Classes",
+        str(doc_metrics['total_classes']),
+        str(doc_metrics['documented_classes']),
+        format_percentage(doc_metrics['total_classes'], doc_metrics['documented_classes'])
+    )
+    
+    table.add_row(
+        "Functions",
+        str(doc_metrics['total_functions']),
+        str(doc_metrics['documented_functions']),
+        format_percentage(doc_metrics['total_functions'], doc_metrics['documented_functions'])
+    )
+    
+    # Add overall coverage row
+    table.add_row(
+        "Overall",
+        str(total_items),
+        str(documented_items),
+        format_coverage_percentage(overall_coverage)
+    )
+    
+    console.print(table)
+    
+    # Display files with poor documentation
+    if doc_metrics['files']:
+        # Sort files by documentation coverage
+        sorted_files = sorted(
+            doc_metrics['files'].items(),
+            key=lambda x: x[1]['doc_coverage']
+        )
+        
+        # Show the worst 10 files
+        if len(sorted_files) > 0:
+            console.print("\n[bold]Top 10 Files Needing Documentation:[/bold]")
+            
+            files_table = Table(box=SIMPLE)
+            files_table.add_column("File")
+            files_table.add_column("Coverage", justify="right")
+            files_table.add_column("Missing Docs")
+            
+            for fn, metrics in sorted_files[:10]:
+                missing = ", ".join([f"{type_} '{name}'" for type_, name, _ in metrics['missing_docs'][:5]])
+                if len(metrics['missing_docs']) > 5:
+                    missing += f" and {len(metrics['missing_docs']) - 5} more..."
+                    
+                files_table.add_row(
+                    fn,
+                    format_coverage_percentage(metrics['doc_coverage']),
+                    missing or "N/A"
+                )
+                
+            console.print(files_table)
+    
+    return doc_metrics
+
+def evaluate_docstring_quality(docstring):
+    """Evaluate the quality of a docstring.
+    
+    Args:
+        docstring: The docstring to evaluate
+        
+    Returns:
+        float: Quality score between 0.0 and 1.0
+    """
+    if not docstring:
+        return 0.0
+    
+    score = 0.0
+    max_score = 4.0  # Maximum possible score
+    
+    # Check length (min 10 characters)
+    if len(docstring) >= 10:
+        score += 1.0
+    
+    # Check if it contains parameter descriptions (Args, Parameters, etc.)
+    if any(marker in docstring for marker in ['Args:', 'Parameters:', 'param ']):
+        score += 1.0
+    
+    # Check if it contains return value description
+    if any(marker in docstring for marker in ['Returns:', 'Return:', 'rtype:', 'return:']):
+        score += 1.0
+    
+    # Check if there's a description beyond one line
+    if docstring.count('\n') >= 1:
+        score += 1.0
+    
+    return score / max_score
+
+def format_percentage(total, documented):
+    """Format a coverage percentage with color coding.
+    
+    Args:
+        total: Total number of items
+        documented: Number of documented items
+        
+    Returns:
+        str: Formatted percentage string with color
+    """
+    if total == 0:
+        return "N/A"
+    
+    percentage = (documented / total) * 100
+    return format_coverage_percentage(percentage)
+
+def format_coverage_percentage(percentage):
+    """Format a coverage percentage with color coding.
+    
+    Args:
+        percentage: The percentage to format
+        
+    Returns:
+        str: Formatted percentage string with color
+    """
+    if percentage >= 80:
+        return f"[green]{percentage:.1f}%[/green]"
+    elif percentage >= 50:
+        return f"[yellow]{percentage:.1f}%[/yellow]"
+    else:
+        return f"[red]{percentage:.1f}%[/red]"
 
 _js_import_re = re.compile(r"""import\s+(?:.+?\s+from\s+)?['"]([^'"]+)['"]""")
 _js_require_re = re.compile(r"""require\(\s*['"]([^'"]+)['"]\s*\)""")

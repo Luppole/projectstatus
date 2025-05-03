@@ -35,7 +35,7 @@ def interactive_menu():
     menu.add_row("8", "💾 Export options")
     menu.add_row("9", "🔒 Security scan")
     menu.add_row("A", "🔎 Advanced search")
-    menu.add_row("Q", "⚙️  Code quality metrics")
+    menu.add_row("Q", "⚙️ Code quality metrics")
     menu.add_row("G", "🗂️ Git integration")
     menu.add_row("D", "🔗 Dependency analysis")
     menu.add_row("H", "🏥 Code health analysis")
@@ -63,6 +63,13 @@ def export_menu():
     menu.add_row("0", "↩️ Back to main menu")
     console.print(menu)
     return Prompt.ask("➡️ Choose export format", choices=["0","1","2","3"], default="1")
+
+# Define available themes
+THEMES = {
+    "default": "Default theme",
+    "dark": "Dark theme",
+    "light": "Light theme"
+}
 
 def show_info(path, file_stats, stats, command_registry):
     """Display information about the current scan."""
